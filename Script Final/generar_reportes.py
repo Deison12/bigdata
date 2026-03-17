@@ -6,8 +6,10 @@ import matplotlib.pyplot as plt
 from io import BytesIO
 
 # Configuración
-CSV_FILE = "dataset_eventos_50000_v2_sucio.csv"
-OUTPUT_DIR = "reportes_generados"
+import pathlib
+BASE_DIR = pathlib.Path(__file__).resolve().parent
+CSV_FILE = str(BASE_DIR / "dataset_eventos_50000_v2_sucio.csv")
+OUTPUT_DIR = str(BASE_DIR / "reportes_generados")
 
 if not os.path.exists(OUTPUT_DIR):
     os.makedirs(OUTPUT_DIR)
