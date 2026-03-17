@@ -2,9 +2,11 @@ import pandas as pd
 from docx import Document
 from docx.shared import Inches
 import os
+import matplotlib.pyplot as plt
+from io import BytesIO
 
 # Configuración
-CSV_FILE = "dataset_eventos_50000.csv"
+CSV_FILE = "dataset_eventos_50000_v2_sucio.csv"
 OUTPUT_DIR = "reportes_generados"
 
 if not os.path.exists(OUTPUT_DIR):
@@ -12,6 +14,63 @@ if not os.path.exists(OUTPUT_DIR):
 
 print(f"Leyendo dataset: {CSV_FILE}...")
 df = pd.read_csv(CSV_FILE, encoding="utf-8-sig")
+
+def limpiar_numero(val):
+    if pd.isna(val): return 0.0
+    val_str = str(val).replace('$', '').replace(' ', '')
+    if ',' in val_str and '.' in val_str:
+        if val_str.rfind(',') > val_str.rfind('.'):
+            val_str = val_str.replace('.', '').replace(',', '.')
+        else:
+            val_str = val_str.replace(',', '')
+    elif ',' in val_str:
+        val_str = val_str.replace(',', '.')
+    try:
+        return float(val_str)
+    except:
+        return 0.0
+
+def limpiar_texto(val):
+    if pd.isna(val): return "Desconocido"
+    return str(val).strip().title()
+
+def preparar_datos_limpios(df):
+    df['monto_transaccion'] = df['monto_transaccion'].apply(limpiar_numero)
+    if 'monto_total' not in df.columns:
+        df['monto_total'] = df['monto_transaccion']
+    if 'comision' not in df.columns:
+        df['comision'] = df['monto_total'] * 0.02
+    if 'impuesto' in df.columns:
+        df['impuesto'] = df['impuesto'].apply(limpiar_numero)
+    if 'ingresos_mensuales' in df.columns:
+        df['ingresos_mensuales'] = df['ingresos_mensuales'].apply(limpiar_numero)
+    df['es_fraude'] = df['es_fraude'].apply(lambda x: 1 if str(x).strip().lower() in ['1', 'true', 'si', 'yes'] else 0)
+    for col in ['canal_transaccion', 'categoria_comercio', 'profesion', 'genero', 'departamento', 'ciudad', 'categoria_tarjeta', 'nombre_comercio', 'estado_civil']:
+        if col in df.columns:
+            df[col] = df[col].apply(limpiar_texto)
+    if 'id_transaccion' not in df.columns:
+        df['id_transaccion'] = df.index
+    return df
+
+df = preparar_datos_limpios(df)
+
+def get_chart_stream():
+    stream = BytesIO()
+    plt.tight_layout()
+    plt.savefig(stream, format='png')
+    stream.seek(0)
+    plt.close()
+    return stream
+
+def guardar_reporte(doc, output_dir, filename):
+    import time
+    path = os.path.join(output_dir, filename)
+    try:
+        doc.save(path)
+    except PermissionError:
+        path = os.path.join(output_dir, filename.replace('.docx', f'_{int(time.time())}.docx'))
+        doc.save(path)
+    return path
 
 # 1. Reporte de Fraudes
 def generar_reporte_fraudes():
@@ -44,6 +103,14 @@ def generar_reporte_fraudes():
         row_cells = table.add_row().cells
         row_cells[0].text = str(canal)
         row_cells[1].text = f"{count:,}"
+    
+    plt.figure(figsize=(6, 4))
+    canal_fraude.plot(kind='bar', color='salmon')
+    plt.title('Número de Fraudes por Canal')
+    plt.xlabel('Canal')
+    plt.ylabel('Cantidad')
+    plt.xticks(rotation=45)
+    doc.add_picture(get_chart_stream(), width=Inches(5.5))
 
     # Análisis por Categoría
     doc.add_heading('3. Análisis por Categoría de Comercio', level=1)
@@ -60,12 +127,18 @@ def generar_reporte_fraudes():
         row_cells[0].text = str(cat)
         row_cells[1].text = f"{count:,}"
 
+    plt.figure(figsize=(6, 4))
+    cat_fraude.plot(kind='pie', autopct='%1.1f%%', colormap='Pastel1')
+    plt.title('Incidencia de Fraude por Categoría')
+    plt.ylabel('')
+    doc.add_picture(get_chart_stream(), width=Inches(5.0))
+
     # Recomendaciones
     doc.add_heading('4. Conclusiones y Recomendaciones', level=1)
     doc.add_paragraph("1. Reforzar los protocolos de validación en los canales con mayor incidencia.")
     doc.add_paragraph("2. Implementar reglas de monitoreo en tiempo real para las categorías de comercio críticas.")
     
-    doc.save(os.path.join(OUTPUT_DIR, 'Reporte_Fraudes_Ejecutivo.docx'))
+    guardar_reporte(doc, OUTPUT_DIR, 'Reporte_Fraudes_Ejecutivo.docx')
     print("Reporte de Fraudes Ejecutivo generado.")
 
 # 2. Reporte Demográfico
@@ -95,6 +168,13 @@ def generar_reporte_demografico():
         row_cells = table.add_row().cells
         row_cells[0].text = str(prof)
         row_cells[1].text = f"{count:,}"
+
+    plt.figure(figsize=(7, 4))
+    profesiones.plot(kind='barh', color='skyblue')
+    plt.title('Cantidad de Clientes por Profesión')
+    plt.xlabel('Cantidad')
+    plt.ylabel('Profesión')
+    doc.add_picture(get_chart_stream(), width=Inches(6.0))
     
     # Nivel Económico
     doc.add_heading('3. Ingreso Mensual Promedio por Género', level=1)
@@ -110,8 +190,15 @@ def generar_reporte_demografico():
         row_cells = table_ing.add_row().cells
         row_cells[0].text = str(gen)
         row_cells[1].text = f"${val:,.2f}"
+
+    plt.figure(figsize=(5, 4))
+    ingresos.plot(kind='bar', color='lightcoral')
+    plt.title('Ingreso Mensual Promedio por Género')
+    plt.ylabel('Ingreso ($)')
+    plt.xticks(rotation=0)
+    doc.add_picture(get_chart_stream(), width=Inches(4.5))
         
-    doc.save(os.path.join(OUTPUT_DIR, 'Reporte_Demografico_Ejecutivo.docx'))
+    guardar_reporte(doc, OUTPUT_DIR, 'Reporte_Demografico_Ejecutivo.docx')
     print("Reporte Demográfico Ejecutivo generado.")
 
 # 3. Reporte Operativo
@@ -140,6 +227,13 @@ def generar_reporte_operativo():
         row_cells = table.add_row().cells
         row_cells[0].text = str(depto)
         row_cells[1].text = f"{count:,} tx"
+
+    plt.figure(figsize=(7, 4))
+    deptos.head(10).plot(kind='bar', color='mediumseagreen')
+    plt.title('Top 10 Departamentos por Operaciones')
+    plt.ylabel('Cantidad de Transacciones')
+    plt.xticks(rotation=45)
+    doc.add_picture(get_chart_stream(), width=Inches(6.0))
         
     # Top Ciudades
     doc.add_heading('3. Ciudades con Mayor Volumen de Transacción', level=1)
@@ -149,8 +243,14 @@ def generar_reporte_operativo():
         p = doc.add_paragraph(style='List Bullet')
         p.add_run(f"{ciudad}: ").bold = True
         p.add_run(f"{count:,} transacciones")
+
+    plt.figure(figsize=(6, 4))
+    ciudades.plot(kind='pie', autopct='%1.1f%%', colormap='Set3')
+    plt.title('Top 5 Ciudades por Volumen de Transacción')
+    plt.ylabel('')
+    doc.add_picture(get_chart_stream(), width=Inches(5.0))
         
-    doc.save(os.path.join(OUTPUT_DIR, 'Reporte_Operativo_Ejecutivo.docx'))
+    guardar_reporte(doc, OUTPUT_DIR, 'Reporte_Operativo_Ejecutivo.docx')
     print("Reporte Operativo Ejecutivo generado.")
 
 # 4. Reporte Financiero
@@ -175,6 +275,13 @@ def generar_reporte_financiero():
     
     table_res.rows[2].cells[0].text = "Total Impuestos Recaudados"
     table_res.rows[2].cells[1].text = f"${total_impuesto:,.2f}"
+
+    plt.figure(figsize=(6, 4))
+    pd.Series({'Comisiones': total_comision, 'Impuestos': total_impuesto}).plot(kind='bar', color=['gold', 'orange'])
+    plt.title('Total Comisiones vs Impuestos')
+    plt.ylabel('Monto ($)')
+    plt.xticks(rotation=0)
+    doc.add_picture(get_chart_stream(), width=Inches(5.0))
     
     # Rentabilidad por Producto
     doc.add_heading('2. Carga Financiera por Categoría de Tarjeta', level=1)
@@ -190,8 +297,16 @@ def generar_reporte_financiero():
         row_cells = table_tar.add_row().cells
         row_cells[0].text = str(cat)
         row_cells[1].text = f"${val:,.2f}"
+
+    plt.figure(figsize=(6, 4))
+    cat_tarjeta.plot(kind='bar', color='purple')
+    plt.title('Carga Financiera por Categoría de Tarjeta')
+    plt.ylabel('Monto Acumulado ($)')
+    plt.xlabel('Categoría de Tarjeta')
+    plt.xticks(rotation=45)
+    doc.add_picture(get_chart_stream(), width=Inches(5.5))
         
-    doc.save(os.path.join(OUTPUT_DIR, 'Reporte_Financiero_Ejecutivo.docx'))
+    guardar_reporte(doc, OUTPUT_DIR, 'Reporte_Financiero_Ejecutivo.docx')
     print("Reporte Financiero Ejecutivo generado.")
 
 if __name__ == "__main__":
